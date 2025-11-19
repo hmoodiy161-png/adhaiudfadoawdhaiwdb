@@ -1,118 +1,78 @@
-// server.js
 const express = require("express");
-const fs = require("fs").promises;
+const fs = require("fs");
 const path = require("path");
 
 const app = express();
-const PORT = process.env.PORT || 3000;
-
-const DB_FILE = path.join(__dirname, "licenses-db.json");
-
 app.use(express.json());
 
-// تحميل قاعدة البيانات من ملف JSON
-async function loadDB() {
-  try {
-    const data = await fs.readFile(DB_FILE, "utf8");
-    return JSON.parse(data);
-  } catch (err) {
-    return { licenses: [] };
-  }
+// مسار ملف قاعدة البيانات
+const DB_PATH = path.join(__dirname, "licenses-db.json");
+
+// دالة لتحميل البيانات
+function loadDB() {
+  const raw = fs.readFileSync(DB_PATH, "utf8");
+  return JSON.parse(raw);
 }
 
-// حفظ قاعدة البيانات
-async function saveDB(db) {
-  await fs.writeFile(DB_FILE, JSON.stringify(db, null, 2), "utf8");
+// دالة لحفظ البيانات
+function saveDB(db) {
+  fs.writeFileSync(DB_PATH, JSON.stringify(db, null, 2));
 }
 
-// 🔐 تفعيل / ربط HWID أوتوماتيك
-app.post("/api/activate", async (req, res) => {
-  const { key, hwid } = req.body || {};
+// ============================
+// 🔐 نظام تسجيل دخول المسؤول
+// ============================
 
-  if (!key || !hwid) {
-    return res.status(400).json({
-      ok: false,
-      errorCode: "BAD_REQUEST",
-      message: "مفقود key أو hwid — Missing key or hwid",
+const ADMIN_PASSWORD = "admin123"; // غيّرها لكلمة قوية
+const MASTER_TOKEN = "MASTER_ADMIN_TOKEN_123456"; // غيّرها لأي قيمة
+
+// مسار تسجيل الدخول
+app.post("/api/admin/login", (req, res) => {
+  const { password } = req.body;
+
+  if (password === ADMIN_PASSWORD) {
+    return res.json({
+      ok: true,
+      token: MASTER_TOKEN
     });
   }
 
-  const db = await loadDB();
-  const licenseKey = String(key).trim().toLowerCase();
-
-  const lic = db.licenses.find(
-    (l) =>
-      typeof l.key === "string" &&
-      l.key.trim().toLowerCase() === licenseKey
-  );
-
-  if (!lic) {
-    return res.status(404).json({
-      ok: false,
-      errorCode: "NOT_FOUND",
-      message: "المفتاح غير صحيح — License key not found",
-    });
-  }
-
-  if (lic.disabled) {
-    return res.status(403).json({
-      ok: false,
-      errorCode: "DISABLED",
-      message: "المفتاح مقفّل من المزود — License has been disabled",
-    });
-  }
-
-  if (lic.expiresAt) {
-    const now = new Date();
-    const exp = new Date(lic.expiresAt);
-    if (now > exp) {
-      return res.status(403).json({
-        ok: false,
-        errorCode: "EXPIRED",
-        message: "صلاحية المفتاح انتهت — License has expired",
-      });
-    }
-  }
-
-  // 🔗 Auto HWID Link
-  if (!lic.hwid || lic.hwid === null) {
-    lic.hwid = hwid; // اربطه أول مرة بهذا الجهاز
-    await saveDB(db);
-    console.log("🔗 Auto-linked HWID:", hwid, "for key:", lic.key);
-  } else if (lic.hwid !== hwid) {
-    return res.status(403).json({
-      ok: false,
-      errorCode: "HWID_MISMATCH",
-      message:
-        "المفتاح مفعّل على جهاز ثاني — License already used on another device (HWID mismatch)",
-    });
-  }
-
-  // تفعيل ناجح
   return res.json({
-    ok: true,
-    errorCode: null,
-    message: "تم التفعيل بنجاح — Activated successfully",
-    license: {
-      key: lic.key,
-      hwid: lic.hwid,
-      expiresAt: lic.expiresAt || null,
-      disabled: lic.disabled || false,
-      note: lic.note || null,
-    },
+    ok: false,
+    message: "كلمة المرور غير صحيحة"
   });
 });
 
-// لوحة بسيطة ترجع كل المفاتيح (API للـ Dashboard)
-app.get("/api/admin/licenses", async (req, res) => {
-  const db = await loadDB();
+// Middleware لحماية مسارات لوحة التحكم
+app.use((req, res, next) => {
+  if (req.path.startsWith("/api/admin") && req.path !== "/api/admin/login") {
+    const token = req.headers["x-admin-token"];
+
+    if (token !== MASTER_TOKEN) {
+      return res.status(403).json({ ok: false, message: "غير مصرح" });
+    }
+  }
+  next();
+});
+
+// ============================
+// API: قراءة المفاتيح (Admin)
+// ============================
+
+app.get("/api/admin/licenses", (req, res) => {
+  const db = loadDB();
   res.json(db);
 });
-// إضافة مفتاح جديد
-app.post("/api/admin/add", async (req, res) => {
+
+// ============================
+// API: إضافة مفتاح
+// ============================
+
+app.post("/api/admin/add", (req, res) => {
   const { key, expiresAt } = req.body;
 
-  const db = await loadDB();
+  const db = loadDB();
+
   db.licenses.push({
     key,
     hwid: null,
@@ -121,54 +81,109 @@ app.post("/api/admin/add", async (req, res) => {
     note: null
   });
 
-  await saveDB(db);
+  saveDB(db);
   res.json({ ok: true });
 });
 
-// Reset HWID
-app.post("/api/admin/reset-hwid", async (req, res) => {
+// ============================
+// API: Reset HWID
+// ============================
+
+app.post("/api/admin/reset-hwid", (req, res) => {
   const { key } = req.body;
 
-  const db = await loadDB();
+  const db = loadDB();
   const lic = db.licenses.find(l => l.key === key);
 
   if (lic) {
     lic.hwid = null;
-    await saveDB(db);
+    saveDB(db);
   }
+
   res.json({ ok: true });
 });
 
-// Disable / Enable
-app.post("/api/admin/toggle-disable", async (req, res) => {
+// ============================
+// API: Enable / Disable مفتاح
+// ============================
+
+app.post("/api/admin/toggle-disable", (req, res) => {
   const { key } = req.body;
 
-  const db = await loadDB();
+  const db = loadDB();
   const lic = db.licenses.find(l => l.key === key);
 
   if (lic) {
     lic.disabled = !lic.disabled;
-    await saveDB(db);
+    saveDB(db);
   }
+
   res.json({ ok: true });
 });
 
-// Delete key
-app.post("/api/admin/delete", async (req, res) => {
+// ============================
+// API: حذف مفتاح
+// ============================
+
+app.post("/api/admin/delete", (req, res) => {
   const { key } = req.body;
 
-  let db = await loadDB();
+  let db = loadDB();
   db.licenses = db.licenses.filter(l => l.key !== key);
 
-  await saveDB(db);
+  saveDB(db);
   res.json({ ok: true });
 });
 
-// عرض Dashboard
+// ============================
+// API: تفعيل المستخدم (Electron)
+// ============================
+
+app.post("/api/activate", (req, res) => {
+  const { key, hwid } = req.body;
+
+  const db = loadDB();
+  const lic = db.licenses.find(l => l.key === key);
+
+  if (!lic) {
+    return res.json({ ok: false, message: "مفتاح غير موجود" });
+  }
+
+  if (lic.disabled) {
+    return res.json({ ok: false, message: "تم إيقاف المفتاح" });
+  }
+
+  // لو عنده HWID محفوظ → لازم يطابق
+  if (lic.hwid && lic.hwid !== hwid) {
+    return res.json({ ok: false, message: "HWID غير مطابق" });
+  }
+
+  // لو مفتاح غير مربوط → نربطه الآن
+  if (!lic.hwid) {
+    lic.hwid = hwid;
+    saveDB(db);
+  }
+
+  return res.json({
+    ok: true,
+    expiresAt: lic.expiresAt,
+    note: lic.note
+  });
+});
+
+// ============================
+// صفحة لوحة التحكم
+// ============================
+
 app.get("/admin", (req, res) => {
   res.sendFile(path.join(__dirname, "admin.html"));
 });
 
+// ============================
+// تشغيل السيرفر
+// ============================
+
+const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`License server running on http://localhost:${PORT}`);
+  console.log(`License server running on port ${PORT}`);
 });
