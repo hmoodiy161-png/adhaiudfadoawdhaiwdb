@@ -1,0 +1,11 @@
+{
+  "licenses": [
+    {
+      "key": "TEST-123-ABC",
+      "hwid": null,
+      "expiresAt": "2026-01-01T00:00:00Z",
+      "disabled": false,
+      "note": "VIP User"
+    }
+  ]
+}
