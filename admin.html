@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="ar">
+<head>
+  <meta charset="UTF-8" />
+  <title>Admin Login</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+
+<body class="bg-gray-900 text-white p-6">
+
+  <!-- الشاشة: تسجيل الدخول -->
+  <div id="login-screen" class="max-w-md mx-auto bg-gray-800 p-6 rounded-lg mt-20">
+    <h1 class="text-2xl mb-4 font-bold text-center">تسجيل دخول المسؤول 🔐</h1>
+
+    <input id="password" type="password" placeholder="ادخل كلمة المرور"
+      class="w-full p-3 bg-gray-700 rounded mb-4" />
+
+    <button onclick="login()"
+      class="w-full bg-blue-600 hover:bg-blue-700 p-3 rounded">دخول</button>
+
+    <p id="login-error" class="text-red-400 mt-3 hidden">خطأ في كلمة المرور</p>
+  </div>
+
+  <!-- الشاشة: لوحة التحكم -->
+  <div id="dashboard" class="hidden">
+    <h1 class="text-3xl font-bold mb-6">لوحة إدارة التفعيل 🔐</h1>
+
+    <button onclick="logout()" class="bg-red-600 p-2 rounded mb-6">تسجيل خروج</button>
+
+    <!-- إضافة مفتاح -->
+    <div class="bg-gray-800 p-4 rounded-lg mb-6">
+      <h2 class="text-xl font-bold mb-3">إضافة مفتاح جديد</h2>
+
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <input id="add-key" type="text" placeholder="License Key"
+          class="p-2 rounded bg-gray-700 border border-gray-600" />
+
+        <input id="add-exp" type="datetime-local"
+          class="p-2 rounded bg-gray-700 border border-gray-600" />
+
+        <button onclick="addLicense()"
+          class="bg-blue-600 hover:bg-blue-700 p-2 rounded">إضافة</button>
+      </div>
+    </div>
+
+    <!-- جدول المفاتيح -->
+    <div class="bg-gray-800 p-4 rounded-lg">
+      <h2 class="text-xl font-bold mb-4">جميع المفاتيح</h2>
+
+      <table class="w-full text-left">
+        <thead>
+          <tr class="border-b border-gray-600">
+            <th class="p-2">Key</th>
+            <th class="p-2">HWID</th>
+            <th class="p-2">Expiry</th>
+            <th class="p-2">Status</th>
+            <th class="p-2">Actions</th>
+          </tr>
+        </thead>
+        <tbody id="license-table"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <script>
+    let TOKEN = null;
+
+    async function login() {
+      const password = document.getElementById("password").value;
+
+      const res = await fetch("/api/admin/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ password }),
+      });
+
+      const data = await res.json();
+
+      if (!data.ok) {
+        document.getElementById("login-error").classList.remove("hidden");
+        return;
+      }
+
+      TOKEN = data.token;
+      localStorage.setItem("adminToken", TOKEN);
+
+      document.getElementById("login-screen").classList.add("hidden");
+      document.getElementById("dashboard").classList.remove("hidden");
+
+      loadLicenses();
+    }
+
+    function logout() {
+      TOKEN = null;
+      localStorage.removeItem("adminToken");
+
+      location.reload();
+    }
+
+    async function autologin() {
+      const saved = localStorage.getItem("adminToken");
+      if (!saved) return;
+
+      TOKEN = saved;
+
+      document.getElementById("login-screen").classList.add("hidden");
+      document.getElementById("dashboard").classList.remove("hidden");
+
+      loadLicenses();
+    }
+
+    async function loadLicenses() {
+      const res = await fetch("/api/admin/licenses", {
+        headers: { "x-admin-token": TOKEN },
+      });
+
+      const data = await res.json();
+      const table = document.getElementById("license-table");
+      table.innerHTML = "";
+
+      data.licenses.forEach((lic) => {
+        table.innerHTML += `
+          <tr class="border-b border-gray-700">
+            <td class="p-2">${lic.key}</td>
+            <td class="p-2">${lic.hwid || "<span class='text-gray-500'>غير مرتبط</span>"}</td>
+            <td class="p-2">${lic.expiresAt ?? "∞"}</td>
+            <td class="p-2">${lic.disabled ? "❌ Disabled" : "✔ Active"}</td>
+
+            <td class="p-2">
+              <button onclick="resetHWID('${lic.key}')"
+                class="bg-yellow-500 px-3 py-1 rounded mr-2">Reset HWID</button>
+
+              <button onclick="toggleDisable('${lic.key}')"
+                class="bg-red-500 px-3 py-1 rounded mr-2">
+                ${lic.disabled ? "Enable" : "Disable"}
+              </button>
+
+              <button onclick="deleteLicense('${lic.key}')"
+                class="bg-gray-600 px-3 py-1 rounded">Delete</button>
+            </td>
+          </tr>
+        `;
+      });
+    }
+
+    async function addLicense() {
+      const key = document.getElementById("add-key").value.trim();
+      const expiresAt = document.getElementById("add-exp").value || null;
+
+      await fetch("/api/admin/add", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-admin-token": TOKEN,
+        },
+        body: JSON.stringify({ key, expiresAt }),
+      });
+
+      loadLicenses();
+    }
+
+    async function resetHWID(key) {
+      await fetch("/api/admin/reset-hwid", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-admin-token": TOKEN,
+        },
+        body: JSON.stringify({ key }),
+      });
+      loadLicenses();
+    }
+
+    async function toggleDisable(key) {
+      await fetch("/api/admin/toggle-disable", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-admin-token": TOKEN,
+        },
+        body: JSON.stringify({ key }),
+      });
+      loadLicenses();
+    }
+
+    async function deleteLicense(key) {
+      await fetch("/api/admin/delete", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-admin-token": TOKEN,
+        },
+        body: JSON.stringify({ key }),
+      });
+      loadLicenses();
+    }
+
+    autologin();
+  </script>
+</body>
+</html>
